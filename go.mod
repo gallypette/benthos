@@ -90,6 +90,7 @@ require (
 	github.com/olivere/elastic/v7 v7.0.29
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ory/dockertest/v3 v3.6.3
+	github.com/oschwald/geoip2-golang v1.4.0
 	github.com/patrobinson/gokini v0.1.0
 	github.com/pebbe/zmq4 v1.2.7
 	github.com/pierrec/lz4/v4 v4.1.11
@@ -140,3 +141,4 @@ require (
 replace github.com/keybase/go-keychain => github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4
 
 go 1.16
+
