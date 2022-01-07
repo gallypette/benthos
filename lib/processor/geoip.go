@@ -2,6 +2,7 @@ package processor
 
 import (
 	"fmt"
+	"github.com/Jeffail/gabs/v2"
 	"net"
 	"time"
 
@@ -32,6 +33,12 @@ type GeoIPConfig struct {
 	Database     string `json:"database" yaml:"database"`
 }
 
+// GeoCoord contains the city coordinates returned by geoIP
+type GeoCoord struct {
+	geoip_lat float64 `json:"geoip_lat"`
+	geoip_lon float64 `json:"geoip_lon"`
+}
+
 // NewGeoIPConfig returns a GeoIPConfig with default values.
 func NewGeoIPConfig() GeoIPConfig {
 	return GeoIPConfig{
@@ -51,7 +58,11 @@ func cityReader() geoipReader {
 		if err != nil {
 			return nil, err
 		}
-		return res, nil
+		ret := GeoCoord{
+			geoip_lat: res.Location.Latitude,
+			geoip_lon: res.Location.Longitude,
+		}
+		return ret, nil
 	}
 }
 
@@ -132,14 +143,27 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 	newMsg := msg.Copy()
 
 	proc := func(index int, span opentracing.Span, part types.Part) error {
-		strPart := string(part.Get())
-		ip := net.ParseIP(strPart)
-		if ip == nil {
+
+		ipj, err := part.JSON()
+		if err != nil {
 			g.mErr.Incr(1)
-			g.log.Debugf("Failed to parse as an IP: %v\n", strPart)
-			return fmt.Errorf("failed to parse as an IP: %v", strPart)
+			g.log.Debugf("Failed to parse JSON ip field: %v\n", err)
+			return fmt.Errorf("Failed to parse JSON ip field: %v\n", err)
 		}
 
+		gPart := gabs.Wrap(ipj)
+		var ip []byte
+		valueip, ok := gPart.Path("ip").Data().(string)
+		if ok {
+			ip = net.ParseIP(valueip)
+			if ip == nil {
+				g.mErr.Incr(1)
+				g.log.Debugf("Failed to parse as an IP: %v\n", valueip)
+				return fmt.Errorf("failed to parse as an IP: %v", valueip)
+			}
+		}
+
+		//result, err := g.reader(g.handler, string.(ip))
 		result, err := g.reader(g.handler, ip)
 		if err != nil {
 			g.mErr.Incr(1)
@@ -147,7 +171,14 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 			return err
 		}
 
-		part.SetJSON(result)
+		res := result.(GeoCoord)
+		jsonObj := gabs.New()
+		jsonObj.Set(res.geoip_lat, "geoip_lat")
+		jsonObj.Set(res.geoip_lon, "geoip_lon")
+		err = part.SetJSON(jsonObj)
+		if err != nil {
+			return err
+		}
 		return nil
 	}
 
