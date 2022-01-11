@@ -2,14 +2,14 @@ package processor
 
 import (
 	"fmt"
+	"github.com/Jeffail/benthos/v3/lib/types"
 	"github.com/Jeffail/gabs/v2"
 	"net"
 	"time"
 
+	"github.com/Jeffail/benthos/v3/internal/tracing"
 	"github.com/Jeffail/benthos/v3/lib/log"
 	"github.com/Jeffail/benthos/v3/lib/metrics"
-	"github.com/Jeffail/benthos/v3/lib/types"
-	"github.com/opentracing/opentracing-go"
 	"github.com/oschwald/geoip2-golang"
 )
 
@@ -31,12 +31,15 @@ type GeoIPConfig struct {
 	Parts        []int  `json:"parts" yaml:"parts"`
 	DatabaseType string `json:"database_type" yaml:"database_type"`
 	Database     string `json:"database" yaml:"database"`
+	Field        string `json:"field" yaml:"field"`
 }
 
 // GeoCoord contains the city coordinates returned by geoIP
 type GeoCoord struct {
-	geoip_lat float64 `json:"geoip_lat"`
-	geoip_lon float64 `json:"geoip_lon"`
+	geoip_lat     float64 `json:"geoip_lat"`
+	geoip_lon     float64 `json:"geoip_lon"`
+	geoip_country string  `json:"geoip_country"`
+	geoip_city    string  `json:"geoip_city"`
 }
 
 // NewGeoIPConfig returns a GeoIPConfig with default values.
@@ -45,6 +48,7 @@ func NewGeoIPConfig() GeoIPConfig {
 		Parts:        []int{},
 		DatabaseType: "",
 		Database:     "",
+		Field:        "",
 	}
 }
 
@@ -59,8 +63,10 @@ func cityReader() geoipReader {
 			return nil, err
 		}
 		ret := GeoCoord{
-			geoip_lat: res.Location.Latitude,
-			geoip_lon: res.Location.Longitude,
+			geoip_lat:     res.Location.Latitude,
+			geoip_lon:     res.Location.Longitude,
+			geoip_country: res.Country.Names["en"],
+			geoip_city:    res.City.Names["en"],
 		}
 		return ret, nil
 	}
@@ -142,7 +148,7 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 	g.mCount.Incr(1)
 	newMsg := msg.Copy()
 
-	proc := func(index int, span opentracing.Span, part types.Part) error {
+	proc := func(index int, span *tracing.Span, part types.Part) error {
 
 		ipj, err := part.JSON()
 		if err != nil {
@@ -153,7 +159,7 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 
 		gPart := gabs.Wrap(ipj)
 		var ip []byte
-		valueip, ok := gPart.Path("ip").Data().(string)
+		valueip, ok := gPart.Path(g.conf.GeoIP.Field).Data().(string)
 		if ok {
 			ip = net.ParseIP(valueip)
 			if ip == nil {
@@ -163,7 +169,6 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 			}
 		}
 
-		//result, err := g.reader(g.handler, string.(ip))
 		result, err := g.reader(g.handler, ip)
 		if err != nil {
 			g.mErr.Incr(1)
@@ -175,6 +180,8 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 		jsonObj := gabs.New()
 		jsonObj.Set(res.geoip_lat, "geoip_lat")
 		jsonObj.Set(res.geoip_lon, "geoip_lon")
+		jsonObj.Set(res.geoip_country, "geoip_country")
+		jsonObj.Set(res.geoip_city, "geoip_city")
 		err = part.SetJSON(jsonObj)
 		if err != nil {
 			return err
@@ -182,7 +189,7 @@ func (g *GeoIP) ProcessMessage(msg types.Message) ([]types.Message, types.Respon
 		return nil
 	}
 
-	IteratePartsWithSpan(TypeGeoIP, g.parts, newMsg, proc)
+	IteratePartsWithSpanV2("GeoIP", g.parts, newMsg, proc)
 
 	g.mBatchSent.Incr(1)
 	g.mSent.Incr(int64(newMsg.Len()))
